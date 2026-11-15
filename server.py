@@ -1,328 +1,240 @@
 import socket
 import threading
-from config import SERVER_IP, SERVER_PORT, BUFFER_SIZE
+from config import (
+    SERVER_HOST, SERVER_PORT, BUFFER_SIZE,
+    ACK_TIMEOUT, EMERGENCY_PORT, NORMAL_PORT
+)
 
 server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-server.bind((SERVER_IP, SERVER_PORT))
+server.bind((SERVER_HOST, SERVER_PORT))
 
 clients = {}
 notifications = {}
-notification_id = 1
-
+next_notification_id = 1
 running = True
-
-
-def receive_messages():
-
-    global running
-
-    while running:
-
-        try:
-            data, address = server.recvfrom(BUFFER_SIZE)
-
-            message = data.decode()
-
-            if message.startswith("REGISTER|"):
-
-                parts = message.split("|", 1)
-
-                if len(parts) != 2:
-                    continue
-
-                client_name = parts[1]
-
-                clients[address] = client_name
-
-                print(
-                    f"\nClient registered: "
-                    f"{client_name} {address}"
-                )
-
-                server.sendto(
-                    b"REGISTERED",
-                    address
-                )
-
-            elif message.startswith("ACK|"):
-
-                parts = message.split("|")
-
-                if len(parts) != 3:
-                    continue
-
-                client_name = parts[1]
-                message_id = int(parts[2])
-
-                if message_id in notifications:
-
-                    notifications[message_id]["acks"].add(
-                        client_name
-                    )
-
-                    print(
-                        f"\nACK received from "
-                        f"{client_name} "
-                        f"for notification "
-                        f"{message_id}"
-                    )
-
-                    show_delivery_status(message_id)
-
-            elif message.startswith("UNREGISTER|"):
-
-                parts = message.split("|", 1)
-
-                if len(parts) != 2:
-                    continue
-
-                client_name = parts[1]
-
-                address_to_remove = None
-
-                for client_address, name in clients.items():
-
-                    if name == client_name:
-                        address_to_remove = client_address
-                        break
-
-                if address_to_remove:
-                    del clients[address_to_remove]
-
-                    print(
-                        f"\nClient disconnected: "
-                        f"{client_name}"
-                    )
-
-        except OSError:
-
-            break
+lock = threading.Lock()
 
 
 def show_delivery_status(message_id):
+    with lock:
+        if message_id not in notifications:
+            return
 
-    notification = notifications[message_id]
+        notification = notifications[message_id]
+        acknowledged = notification["acks"]
+        expected = set(clients.values())
 
-    acknowledged = notification["acks"]
+        print("\nDelivery status")
+        print(f"Notification ID: {message_id}")
+        print(f"Delivered: {len(acknowledged)}/{len(expected)}")
 
-    print(
-        f"Delivery status: "
-        f"{len(acknowledged)}/"
-        f"{len(clients)} clients"
-    )
+        for name in sorted(expected):
+            status = "RECEIVED" if name in acknowledged else "PENDING"
+            print(f"  {name}: {status}")
 
-    for client_name in clients.values():
 
-        if client_name in acknowledged:
-            print(f"  {client_name} [RECEIVED]")
-        else:
-            print(f"  {client_name} [PENDING]")
+def receive_messages():
+    global running
+
+    while running:
+        try:
+            data, address = server.recvfrom(BUFFER_SIZE)
+        except OSError:
+            break
+
+        parts = data.decode(errors="replace").split("|")
+        command = parts[0]
+
+        if command == "REGISTER" and len(parts) == 2:
+            name = parts[1].strip()
+
+            if not name:
+                continue
+
+            with lock:
+                clients[address] = name
+
+            print(f"\nClient registered: {name} {address}")
+            server.sendto(b"REGISTERED", address)
+
+        elif command == "ACK" and len(parts) == 3:
+            name = parts[1]
+
+            try:
+                message_id = int(parts[2])
+            except ValueError:
+                continue
+
+            with lock:
+                if message_id in notifications:
+                    notifications[message_id]["acks"].add(name)
+
+            print(f"\nACK received from {name} for notification {message_id}")
+            show_delivery_status(message_id)
+
+        elif command == "UNREGISTER" and len(parts) == 2:
+            name = parts[1]
+
+            with lock:
+                for address, registered_name in list(clients.items()):
+                    if registered_name == name:
+                        del clients[address]
+                        break
+
+            print(f"\nClient disconnected: {name}")
 
 
 def send_notification():
+    global next_notification_id
 
-    global notification_id
+    with lock:
+        client_addresses = list(clients.keys())
 
-    if not clients:
-
-        print("\nNo clients connected.")
-
+    if not client_addresses:
+        print("\nNo clients are connected.")
         return
 
-    print("\n==============================")
-    print("1. Normal Notification")
+    print("\n1. Normal Notification")
     print("2. Emergency Notification")
-    print("==============================")
 
-    choice = input("Choose notification type: ")
+    choice = input("Choose notification type: ").strip()
 
     if choice == "1":
-
         notification_type = "NORMAL"
         priority = "LOW"
+        destination_port = NORMAL_PORT
 
     elif choice == "2":
-
         notification_type = "EMERGENCY"
         priority = "HIGH"
+        destination_port = EMERGENCY_PORT
 
     else:
-
         print("Invalid choice.")
-
         return
 
-    notification = input(
-        "Enter notification: "
-    )
+    message = input("Enter notification: ").strip()
 
-    current_id = notification_id
+    if not message:
+        print("Notification cannot be empty.")
+        return
 
-    packet = (
-        f"{notification_type}|"
-        f"{current_id}|"
-        f"{notification}"
-    )
+    with lock:
+        message_id = next_notification_id
+        next_notification_id += 1
 
-    notifications[current_id] = {
+        notifications[message_id] = {
+            "type": notification_type,
+            "priority": priority,
+            "message": message,
+            "acks": set()
+        }
 
-        "type": notification_type,
+    packet = f"{notification_type}|{message_id}|{message}"
 
-        "priority": priority,
-
-        "message": notification,
-
-        "acks": set()
-    }
-
-    print("\n==============================")
-    print("Sending notification")
-    print("==============================")
-
-    print(f"ID       : {current_id}")
+    print("\n------------------------------")
+    print(f"ID       : {message_id}")
     print(f"Type     : {notification_type}")
     print(f"Priority : {priority}")
-    print(f"Message  : {notification}")
+    print(f"Message  : {message}")
+    print(f"UDP Port : {destination_port}")
+    print("------------------------------")
 
-    for client_address in clients:
+    for address in client_addresses:
+        try:
+            destination = (address[0], destination_port)
+            server.sendto(packet.encode(), destination)
+        except OSError:
+            pass
 
-        server.sendto(
-            packet.encode(),
-            client_address
-        )
-
-    print(
-        f"\nSent to {len(clients)} client(s)"
-    )
-
-    notification_id += 1
-
-
-def show_history():
-
-    if not notifications:
-
-        print("\nNo notifications sent yet.")
-
-        return
-
-    print("\n========== HISTORY ==========")
-
-    for message_id, data in notifications.items():
-
-        print(
-            f"\nID       : {message_id}"
-        )
-
-        print(
-            f"Type     : {data['type']}"
-        )
-
-        print(
-            f"Priority : {data['priority']}"
-        )
-
-        print(
-            f"Message  : {data['message']}"
-        )
-
-        print(
-            f"ACKs     : "
-            f"{len(data['acks'])}/"
-            f"{len(clients)}"
-        )
+    print(f"Sent to {len(client_addresses)} client(s).")
 
 
 def show_clients():
+    with lock:
+        current_clients = list(clients.items())
 
-    print("\n========== CLIENTS ==========")
+    print("\n========== CONNECTED CLIENTS ==========")
 
-    if not clients:
-
+    if not current_clients:
         print("No clients connected.")
-
         return
 
-    for address, name in clients.items():
-
-        print(
-            f"{name} → {address}"
-        )
+    for address, name in current_clients:
+        print(f"{name} -> {address}")
 
 
-def server_menu():
+def show_history():
+    with lock:
+        history = list(notifications.items())
+        current_clients = set(clients.values())
 
+    print("\n========== NOTIFICATION HISTORY ==========")
+
+    if not history:
+        print("No notifications sent yet.")
+        return
+
+    for message_id, info in history:
+        print(f"\nID       : {message_id}")
+        print(f"Type     : {info['type']}")
+        print(f"Priority : {info['priority']}")
+        print(f"Message  : {info['message']}")
+        print(f"ACKs     : {len(info['acks'])}/{len(current_clients)}")
+
+
+def shutdown():
+    global running
+    running = False
+
+    with lock:
+        addresses = list(clients.keys())
+
+    for address in addresses:
+        for port in (EMERGENCY_PORT, NORMAL_PORT):
+            try:
+                server.sendto(
+                    b"SERVER_SHUTDOWN",
+                    (address[0], port)
+                )
+            except OSError:
+                pass
+
+    server.close()
+    print("\nServer stopped.")
+
+
+def menu():
     while running:
-
-        print("\n")
-        print("==============================")
-        print(" Emergency Notification System")
-        print("==============================")
+        print("\n========================================")
+        print(" Emergency Notification Server")
+        print("========================================")
         print("1. Send notification")
         print("2. Show connected clients")
         print("3. Show notification history")
         print("4. Exit")
 
-        choice = input(
-            "Choose option: "
-        )
+        choice = input("Choose option: ").strip()
 
         if choice == "1":
-
             send_notification()
-
         elif choice == "2":
-
             show_clients()
-
         elif choice == "3":
-
             show_history()
-
         elif choice == "4":
-
             shutdown()
-
         else:
-
             print("Invalid choice.")
-
-
-def shutdown():
-
-    global running
-
-    running = False
-
-    for address in clients:
-
-        try:
-
-            server.sendto(
-                b"SERVER_SHUTDOWN",
-                address
-            )
-
-        except OSError:
-
-            passr
-
-    server.close()
-
-    print("\nServer stopped.")
 
 
 receiver_thread = threading.Thread(
     target=receive_messages,
     daemon=True
 )
-
 receiver_thread.start()
 
 try:
-
-    server_menu()
-
+    menu()
 except KeyboardInterrupt:
-
     shutdown()

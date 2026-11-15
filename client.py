@@ -1,152 +1,120 @@
 import socket
-import sys
-from config import SERVER_IP, SERVER_PORT, BUFFER_SIZE
-
-client = socket.socket(
-    socket.AF_INET,
-    socket.SOCK_DGRAM
+import threading
+from config import (
+    SERVER_IP, SERVER_PORT, BUFFER_SIZE,
+    EMERGENCY_PORT, NORMAL_PORT
 )
 
-client_name = input(
-    "Enter client name: "
-)
+server_address = (SERVER_IP, SERVER_PORT)
+running = threading.Event()
+running.set()
 
-register_message = (
-    f"REGISTER|{client_name}"
-)
+control_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+control_socket.settimeout(5)
 
-client.sendto(
-    register_message.encode(),
-    (SERVER_IP, SERVER_PORT)
-)
+emergency_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+normal_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-data, server_address = client.recvfrom(
-    BUFFER_SIZE
-)
+emergency_socket.bind(("0.0.0.0", EMERGENCY_PORT))
+normal_socket.bind(("0.0.0.0", NORMAL_PORT))
 
-response = data.decode()
 
-if response != "REGISTERED":
+def receive_notifications(sock):
+    while running.is_set():
+        try:
+            data, _ = sock.recvfrom(BUFFER_SIZE)
+            message = data.decode(errors="replace")
 
-    print("Registration failed.")
+            if message == "SERVER_SHUTDOWN":
+                print("\nServer is shutting down.")
+                running.clear()
+                break
 
-    client.close()
+            parts = message.split("|", 2)
 
-    sys.exit()
+            if len(parts) != 3:
+                continue
 
-print(
-    f"\nRegistered as {client_name}"
-)
+            notification_type, message_id, content = parts
 
-print(
-    "Waiting for notifications..."
+            print("\n==============================")
+            print(f" {notification_type} NOTIFICATION")
+            print(f" ID: {message_id}")
+            print(f" Message: {content}")
+            print("==============================")
+
+            control_socket.sendto(
+                f"ACK|{client_name}|{message_id}".encode(),
+                server_address
+            )
+
+            print("Acknowledgement sent.")
+
+        except socket.timeout:
+            continue
+        except OSError:
+            break
+
+
+client_name = input("Enter your name: ").strip()
+
+if not client_name:
+    print("Name cannot be empty.")
+    raise SystemExit
+
+control_socket.sendto(
+    f"REGISTER|{client_name}".encode(),
+    server_address
 )
 
 try:
+    response, _ = control_socket.recvfrom(BUFFER_SIZE)
 
-    while True:
+    if response.decode() != "REGISTERED":
+        print("Registration failed.")
+        raise SystemExit
 
-        data, server_address = client.recvfrom(
-            BUFFER_SIZE
-        )
+except socket.timeout:
+    print("Server did not respond. Check SERVER_IP and try again.")
+    raise SystemExit
 
-        message = data.decode()
+print(f"\nRegistered successfully as {client_name}.")
 
-        if message == "SERVER_SHUTDOWN":
+threading.Thread(
+    target=receive_notifications,
+    args=(emergency_socket,),
+    daemon=True
+).start()
 
-            print(
-                "\nServer is shutting down."
-            )
+threading.Thread(
+    target=receive_notifications,
+    args=(normal_socket,),
+    daemon=True
+).start()
 
-            break
+print("Listening for emergency and normal notifications.")
+print("Press Ctrl+C to disconnect.")
 
-        parts = message.split("|", 2)
-
-        if len(parts) != 3:
-
-            continue
-
-        notification_type = parts[0]
-
-        message_id = parts[1]
-
-        notification = parts[2]
-
-        if notification_type == "EMERGENCY":
-
-            priority = "HIGH"
-
-        else:
-
-            priority = "LOW"
-
-        print("\n")
-        print("==============================")
-
-        if notification_type == "EMERGENCY":
-
-            print(
-                "       !!! EMERGENCY !!!"
-            )
-
-        else:
-
-            print(
-                "       NORMAL NOTICE"
-            )
-
-        print("==============================")
-
-        print(
-            f"Type     : {notification_type}"
-        )
-
-        print(
-            f"ID       : {message_id}"
-        )
-
-        print(
-            f"Priority : {priority}"
-        )
-
-        print(
-            f"Message  : {notification}"
-        )
-
-        print("==============================")
-
-        ack = (
-            f"ACK|"
-            f"{client_name}|"
-            f"{message_id}"
-        )
-
-        client.sendto(
-            ack.encode(),
-            server_address
-        )
+try:
+    while running.is_set():
+        threading.Event().wait(1)
 
 except KeyboardInterrupt:
-
-    print(
-        "\nDisconnecting..."
-    )
+    print("\nDisconnecting...")
 
 finally:
-
-    unregister_message = (
-        f"UNREGISTER|{client_name}"
-    )
+    running.clear()
 
     try:
-
-        client.sendto(
-            unregister_message.encode(),
-            (SERVER_IP, SERVER_PORT)
+        control_socket.sendto(
+            f"UNREGISTER|{client_name}".encode(),
+            server_address
         )
-
     except OSError:
-
         pass
 
-    client.close()
+    control_socket.close()
+    emergency_socket.close()
+    normal_socket.close()
+
+    print("Disconnected.")
