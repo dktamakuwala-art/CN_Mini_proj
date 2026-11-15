@@ -6,7 +6,7 @@ import sys
 CHECKS = [
     ("git", "git"),
     ("python3", "python3"),
-    ("pip", "python3"),
+    ("pip3", "pip3"),
     ("mininet", "mn"),
     ("ovs-vsctl", "ovs-vsctl"),
     ("iperf3", "iperf3"),

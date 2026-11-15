@@ -31,6 +31,7 @@ class EmergencyClient:
         self.receive_sockets = []
         for port in (self.emergency_port, self.normal_port):
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(0.5)
             sock.bind(("0.0.0.0", port))
             self.receive_sockets.append((port, sock))
 
@@ -59,11 +60,10 @@ class EmergencyClient:
         except (ValueError, TypeError):
             return
 
-        if message_id in self.seen_messages:
-            self.send_ack(message_id)
-            return
-
         with self.lock:
+            if message_id in self.seen_messages:
+                self.send_ack(message_id)
+                return
             self.seen_messages.add(message_id)
 
         print("\n==============================")

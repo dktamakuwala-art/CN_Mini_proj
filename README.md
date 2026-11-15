@@ -1,108 +1,130 @@
-# Emergency Notification Network - UDP Application
+# Emergency Notification Network
 
-## Purpose
-This folder contains the UDP application layer for the Emergency Notification Network project.
+UDP-based emergency notification application integrated with an OpenFlow 1.3 SDN controller and a Mininet demonstration topology.
 
-The application supports:
-- Multiple UDP clients/subscribers
-- Client registration
-- Normal notifications
-- Emergency notifications
-- Notification IDs
-- Emergency/high-priority classification
-- Broadcast to all registered clients
-- Delivery acknowledgements (ACKs)
-- Per-client delivery tracking
-- Notification history
-- Client unregister/shutdown handling
+## Project structure
 
-## Files
-- `config.py` - network configuration
-- `server.py` - notification server/sender
-- `client.py` - subscriber/client
+- `src/server.py` — UDP notification server, subscriber registry, ACK tracking and retries
+- `src/client.py` — UDP subscriber client
+- `src/config.py` — shared network and QoS configuration
+- `src/controller.py` — OS-Ken OpenFlow 1.3 learning switch with UDP traffic classification and congestion response
+- `scripts/mininet_topology.py` — four-host Mininet topology and OVS queues
+- `scripts/verify_environment.py` — checks required executables and Python packages
+- `scripts/performance_benchmark.py` — local subscriber scalability benchmark
+- `tests/` — application reliability tests
 
-## Current packet format
+Root-level `server.py` and `client.py` are convenience launchers. The implementation lives in `src/`; duplicate backup implementations were removed to avoid running inconsistent versions.
 
-Registration:
-`REGISTER|<client_name>`
+## Requirements
 
-Notification:
-`<TYPE>|<MESSAGE_ID>|<MESSAGE>`
+Application:
+- Python 3.10+
+- `pytest` to run tests
 
-Examples:
-`NORMAL|1|Maintenance at 6 PM`
-`EMERGENCY|2|Fire detected in Block A`
+SDN demonstration:
+- Mininet
+- Open vSwitch
+- OS-Ken
+- `eventlet`
+- `iperf3` and `xterm` are useful for the congestion demonstration
 
-ACK:
-`ACK|<client_name>|<MESSAGE_ID>`
+Install Python dependencies in the environment used to run the controller:
 
-Unregister:
-`UNREGISTER|<client_name>`
+```bash
+python3 -m pip install os-ken eventlet pytest matplotlib
+```
 
-Server shutdown:
-`SERVER_SHUTDOWN`
+Mininet and Open vSwitch are system packages and should be installed in a supported Linux VM. The Mininet topology is not expected to run natively on macOS.
 
-## Run locally
+## Run the application locally
+
+From the project root:
 
 Terminal 1:
-`python3 server.py`
+
+```bash
+python3 server.py
+```
 
 Terminal 2:
-`python3 client.py`
+
+```bash
+python3 client.py --name Client1
+```
 
 Terminal 3:
-`python3 client.py`
 
-Use different names such as Client1, Client2, Client3.
+```bash
+python3 client.py --name Client2
+```
 
-## Important integration point for SDN
+The default server control address is `0.0.0.0:5000`. Clients use `10.0.0.1` by default. For a local-machine test, pass `--server-ip 127.0.0.1` to each client.
 
-Emergency traffic is identified at the application layer by:
+Each client listens on UDP ports 5001 (emergency) and 5002 (normal). When running multiple clients on the same machine, assign unique receive ports using `--emergency-port` and `--normal-port`; clients on separate Mininet hosts can use the defaults.
 
-`TYPE = EMERGENCY`
+## Run the reliability tests
 
-and is also represented by:
+From the project root:
 
-`Priority = HIGH`
+```bash
+python3 -m pytest -q
+```
 
-Normal traffic uses:
+## Run the SDN demonstration in a Linux VM
 
-`TYPE = NORMAL`
+The supplied topology uses:
+- `h1` — server, `10.0.0.1/24`
+- `h2` — subscriber 1, `10.0.0.2/24`
+- `h3` — subscriber 2, `10.0.0.3/24`
+- `h4` — subscriber 3, `10.0.0.4/24`
+- `s1` — OpenFlow 1.3 switch
 
-and:
+Start the controller in one terminal:
 
-`Priority = LOW`
+```bash
+osken-manager src/controller.py
+```
 
-The SDN/controller part of the project can use this application-level distinction when implementing traffic classification and priority forwarding.
+Start the Mininet topology in another terminal (with the required privileges):
 
-## Moving to VM/Mininet
+```bash
+sudo python3 scripts/mininet_topology.py
+```
 
-Change `SERVER_IP` in `config.py` to the appropriate server/host IP for the VM/Mininet topology.
+At the Mininet CLI, start the server and clients in separate hosts:
 
-The UDP application itself does not require the SDN controller; it simply generates and receives UDP traffic. The SDN layer should be inserted into the network path between the sender and clients.
+```text
+h1 python3 server.py
+h2 python3 client.py --name Client1
+h3 python3 client.py --name Client2
+h4 python3 client.py --name Client3
+```
 
-## Suggested final integration
+These commands assume the project directory is available on each Mininet host's shared filesystem and that Python dependencies are installed. In a typical Mininet process, hosts share the filesystem but have separate network namespaces.
 
-Server/host
-    |
-    | UDP
-    v
-Mininet / SDN switch + controller
-    |
-    +---- Client 1
-    +---- Client 2
-    +---- Client 3
+## Traffic classification and QoS
 
-Under congestion, the final project should compare emergency and normal traffic using latency and packet-loss measurements.
+The controller classifies UDP destination ports:
+- `5001` — emergency, queue 1, highest static flow priority
+- `5002` — normal, queue 2
+- `6000` — background, queue 0
 
-## Testing checklist
+The topology creates OVS queues on the switch-facing host ports. Under congestion, the controller demotes normal traffic to queue 0 and raises emergency-flow priority. Queue selection only has an effect when the corresponding OVS QoS/queue configuration is present on the egress port.
 
-[ ] Register 3 clients
-[ ] Send a normal notification
-[ ] Send an emergency notification
-[ ] Verify all clients receive both
-[ ] Verify ACKs are recorded
-[ ] Verify notification IDs increment
-[ ] Verify client unregister works
-[ ] Test through the VM/Mininet network
-[ ] Test under congestion
+Congestion detection uses the increase in dropped-packet counters between port-statistics samples rather than the lifetime cumulative drop count. This is a simple demonstration heuristic, not a production congestion-control algorithm.
+
+## Benchmark
+
+Run from the project root:
+
+```bash
+python3 scripts/performance_benchmark.py
+```
+
+The script writes CSV and PNG results under `results/`. It is a local UDP application benchmark; it does not measure the Mininet/SDN path unless separately adapted to run through that topology.
+
+## Important limitations
+
+- UDP does not guarantee delivery; ACKs and retries provide application-level confirmation, not exactly-once delivery.
+- ACK tracking is scoped to the subscriber set captured when a notification is sent. A subscriber that disconnects before acknowledging can cause that notification to remain pending and eventually fail.
+- The controller's port-statistics congestion heuristic and queue mapping are intended for the project demonstration. Validate actual OVS queue behavior in the target VM before presenting performance claims.
