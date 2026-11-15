@@ -18,7 +18,7 @@ if __name__ == "__main__":
         while client.running:
             time.sleep(0.5)
     except KeyboardInterrupt:
-        print("\\nDisconnecting...")
+        print("\nDisconnecting...")
     finally:
         client.stop()
         print("Disconnected.")

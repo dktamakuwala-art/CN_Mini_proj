@@ -7,6 +7,6 @@ if __name__ == "__main__":
         server.start()
         server.run_menu()
     except KeyboardInterrupt:
-        print("\\nServer interrupted.")
+        print("\nServer interrupted.")
     finally:
         server.stop()

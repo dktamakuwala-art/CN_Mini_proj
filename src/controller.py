@@ -120,7 +120,7 @@ class EmergencyController(app_manager.OSKenApp):
         udp_pkt = pkt.get_protocol(udp.udp)
         actions = []
 
-        if ip_pkt and udp_pkt:
+        if ip_pkt and udp_pkt and out_port != ofproto.OFPP_FLOOD:
             traffic_type, queue_id, base_priority = self._classify_traffic(udp_pkt.dst_port)
             congested = (dpid, out_port) in self.congested_ports
             if congested and traffic_type == "NORMAL":
