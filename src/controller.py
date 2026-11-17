@@ -9,10 +9,18 @@ from os_ken.lib import hub
 from os_ken.lib.packet import packet, ethernet, ipv4, udp
 from os_ken.ofproto import ofproto_v1_3
 
+import json
+import os
+import time
+
 from src.config import (
-    EMERGENCY_PORT, NORMAL_PORT, BACKGROUND_PORT,
+    EMERGENCY_PORT, NORMAL_PORT, BACKGROUND_PORT, SERVER_PORT,
     CONGESTION_DROP_THRESHOLD, CONGESTION_CHECK_INTERVAL,
+    SDN_SIGNAL_PORT, FLOOD_RATE_THRESHOLD_MBPS, FLOOD_BLOCK_SECONDS,
+    EMERGENCY_HOLD_SECONDS,
 )
+
+EVENT_LOG = os.environ.get("SDN_EVENT_LOG", "logs/controller_events.jsonl")
 
 
 class EmergencyController(app_manager.OSKenApp):
@@ -24,6 +32,9 @@ class EmergencyController(app_manager.OSKenApp):
         self.datapaths = {}
         self.previous_drop_counters = {}
         self.congested_ports = set()
+        self.previous_rx = {}            # (dpid, port) -> (rx_bytes, time)
+        self.blocked_ports = {}          # (dpid, port) -> expiry time
+        self.emergency_until = 0.0       # emergency mode active while now < this
         self.monitor_thread = hub.spawn(self._monitor_loop)
 
     @staticmethod
@@ -32,9 +43,71 @@ class EmergencyController(app_manager.OSKenApp):
             return "EMERGENCY", 1, 300
         if udp_port == NORMAL_PORT:
             return "NORMAL", 2, 200
+        if udp_port == SERVER_PORT:
+            return "CONTROL", 1, 250
         if udp_port == BACKGROUND_PORT:
             return "BACKGROUND", 0, 50
         return "OTHER", None, 10
+
+    @property
+    def emergency_active(self):
+        return time.monotonic() < self.emergency_until
+
+    def log_event(self, event, **fields):
+        """Append a timestamped controller decision to a JSONL file (evidence for the report)."""
+        record = {"t": round(time.time(), 3), "event": event, **fields}
+        self.logger.info("EVENT %s", record)
+        try:
+            os.makedirs(os.path.dirname(EVENT_LOG) or ".", exist_ok=True)
+            with open(EVENT_LOG, "a") as fh:
+                fh.write(json.dumps(record) + "\n")
+        except OSError:
+            pass
+
+    def delete_flows(self, datapath, udp_dst):
+        parser, ofp = datapath.ofproto_parser, datapath.ofproto
+        datapath.send_msg(parser.OFPFlowMod(
+            datapath=datapath, command=ofp.OFPFC_DELETE,
+            out_port=ofp.OFPP_ANY, out_group=ofp.OFPG_ANY,
+            match=parser.OFPMatch(eth_type=0x0800, ip_proto=17, udp_dst=udp_dst),
+        ))
+
+    def handle_app_signal(self, datapath, payload):
+        """Application -> SDN: the notification server reports emergency start/end."""
+        try:
+            msg = json.loads(payload.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return
+        event = msg.get("event")
+        if event == "EMERGENCY_START":
+            was_active = self.emergency_active
+            self.emergency_until = time.monotonic() + EMERGENCY_HOLD_SECONDS
+            if not was_active:
+                # Re-learn NORMAL/BACKGROUND flows so they are pushed to the low queue now.
+                for dp in self.datapaths.values():
+                    self.delete_flows(dp, NORMAL_PORT)
+                    self.delete_flows(dp, BACKGROUND_PORT)
+                self.log_event("EMERGENCY_MODE_ON", id=msg.get("id"),
+                               action="demote NORMAL/BACKGROUND to queue 0, flush their flows")
+        elif event == "EMERGENCY_END":
+            self.emergency_until = 0.0
+            for dp in self.datapaths.values():  # restore normal queues
+                self.delete_flows(dp, NORMAL_PORT)
+                self.delete_flows(dp, BACKGROUND_PORT)
+            self.log_event("EMERGENCY_MODE_OFF", id=msg.get("id"))
+
+    def block_port(self, datapath, port, rate):
+        """Rate-limit a flooding port: drop its low-priority UDP, keep emergency + control."""
+        parser = datapath.ofproto_parser
+        match = parser.OFPMatch(in_port=port, eth_type=0x0800, ip_proto=17)
+        datapath.send_msg(parser.OFPFlowMod(
+            datapath=datapath, priority=220, match=match, instructions=[],
+            hard_timeout=FLOOD_BLOCK_SECONDS,
+        ))
+        self.blocked_ports[(datapath.id, port)] = time.monotonic() + FLOOD_BLOCK_SECONDS
+        self.log_event("FLOOD_BLOCKED", dpid=datapath.id, port=port,
+                       rate_mbps=round(rate, 2), seconds=FLOOD_BLOCK_SECONDS,
+                       action="drop non-emergency UDP from this port (priority 220)")
 
     @property
     def congestion_detected(self):
@@ -85,6 +158,14 @@ class EmergencyController(app_manager.OSKenApp):
         for stat in ev.msg.body:
             port = stat.port_no
             key = (dpid, port)
+            now = time.monotonic()
+            prev_rx = self.previous_rx.get(key)
+            self.previous_rx[key] = (stat.rx_bytes, now)
+            if prev_rx and now > prev_rx[1] and port < 0xffffff00:
+                rate = (stat.rx_bytes - prev_rx[0]) * 8 / (now - prev_rx[1]) / 1e6
+                if (rate > FLOOD_RATE_THRESHOLD_MBPS
+                        and self.blocked_ports.get(key, 0) < now):
+                    self.block_port(ev.msg.datapath, port, rate)
             current = stat.tx_dropped + stat.rx_dropped
             previous = self.previous_drop_counters.get(key, current)
             delta = max(0, current - previous)
@@ -120,10 +201,15 @@ class EmergencyController(app_manager.OSKenApp):
         udp_pkt = pkt.get_protocol(udp.udp)
         actions = []
 
+        if udp_pkt and udp_pkt.dst_port == SDN_SIGNAL_PORT:
+            self.handle_app_signal(datapath, pkt.protocols[-1] if isinstance(
+                pkt.protocols[-1], (bytes, bytearray)) else b"")
+            return  # signalling is consumed by the controller, never forwarded
+
         if ip_pkt and udp_pkt and out_port != ofproto.OFPP_FLOOD:
             traffic_type, queue_id, base_priority = self._classify_traffic(udp_pkt.dst_port)
             congested = (dpid, out_port) in self.congested_ports
-            if congested and traffic_type == "NORMAL":
+            if traffic_type in ("NORMAL", "BACKGROUND") and (congested or self.emergency_active):
                 queue_id = 0
             priority = base_priority
 

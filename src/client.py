@@ -35,16 +35,18 @@ class EmergencyClient:
             sock.bind(("0.0.0.0", port))
             self.receive_sockets.append((port, sock))
 
-    def register(self):
+    def register(self, attempts: int = 3):
         payload = f"REGISTER|{self.name}|{self.emergency_port}|{self.normal_port}".encode("utf-8")
-        self.control_socket.sendto(payload, self.server_address)
-        try:
-            response, _ = self.control_socket.recvfrom(BUFFER_SIZE)
-        except socket.timeout:
-            raise TimeoutError("Server did not respond to registration.")
-
-        if response.decode("utf-8", errors="replace") != "REGISTERED":
-            raise RuntimeError("Server rejected registration.")
+        for _ in range(attempts):
+            self.control_socket.sendto(payload, self.server_address)
+            try:
+                response, _ = self.control_socket.recvfrom(BUFFER_SIZE)
+            except socket.timeout:
+                continue
+            if response.decode("utf-8", errors="replace") != "REGISTERED":
+                raise RuntimeError("Server rejected registration.")
+            return
+        raise TimeoutError("Server did not respond to registration.")
 
     def send_ack(self, message_id: int):
         payload = f"ACK|{self.name}|{message_id}".encode("utf-8")

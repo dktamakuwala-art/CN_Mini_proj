@@ -27,3 +27,13 @@ TRAFFIC_PRIORITY = {
 
 CONGESTION_DROP_THRESHOLD = 50
 CONGESTION_CHECK_INTERVAL = 2.0
+
+# App -> SDN in-band signalling (UDP broadcast, intercepted by the switch and
+# delivered to the controller as a packet-in; no extra connectivity needed)
+SDN_SIGNAL_PORT = 5999
+SDN_SIGNAL_ADDR = "10.0.0.255"
+
+# Dynamic SDN thresholds
+FLOOD_RATE_THRESHOLD_MBPS = 5.0   # per-port ingress rate treated as flooding
+FLOOD_BLOCK_SECONDS = 20          # how long an offending port stays rate-limited
+EMERGENCY_HOLD_SECONDS = 10       # fallback expiry for emergency mode

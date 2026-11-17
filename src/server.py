@@ -1,3 +1,4 @@
+import json
 import socket
 import threading
 import time
@@ -11,12 +12,14 @@ from src.config import (
 
 class NotificationServer:
     def __init__(self, host=SERVER_HOST, udp_port=SERVER_PORT,
-                 ack_timeout=ACK_TIMEOUT, retry_limit=MAX_RETRIES):
+                 ack_timeout=ACK_TIMEOUT, retry_limit=MAX_RETRIES,
+                 sdn_signal=False):
         if ack_timeout <= 0:
             raise ValueError("ack_timeout must be positive")
         if retry_limit < 0:
             raise ValueError("retry_limit cannot be negative")
         self.host = host
+        self.sdn_signal = sdn_signal
         self.udp_port = udp_port
         self.ack_timeout = float(ack_timeout)
         self.retry_limit = int(retry_limit)
@@ -114,6 +117,21 @@ class NotificationServer:
             except OSError:
                 continue
 
+    def _signal_sdn(self, event: str, message_id: int):
+        """Tell the SDN controller about an application event (in-band UDP broadcast)."""
+        if not self.sdn_signal:
+            return
+        from src.config import SDN_SIGNAL_ADDR, SDN_SIGNAL_PORT
+        payload = json.dumps({"event": event, "id": message_id}).encode()
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            for _ in range(2):  # UDP: send twice for robustness
+                sock.sendto(payload, (SDN_SIGNAL_ADDR, SDN_SIGNAL_PORT))
+            sock.close()
+        except OSError:
+            pass
+
     def send_notification(self, notification_type: str, message: str):
         notification_type = notification_type.strip().upper()
         if notification_type not in {"NORMAL", "EMERGENCY"}:
@@ -135,6 +153,8 @@ class NotificationServer:
                 "expected_clients": set(self.clients),
                 "sent_at": time.monotonic(),
             }
+        if notification_type == "EMERGENCY":
+            self._signal_sdn("EMERGENCY_START", message_id)
         self._broadcast(message_id, notification_type, message)
         return message_id
 
@@ -147,9 +167,13 @@ class NotificationServer:
                     or (address is not None and registered_address != address)):
                 return False
             notification["acks"].add(client_name)
-            if notification["acks"] >= notification["expected_clients"]:
+            done = notification["acks"] >= notification["expected_clients"]
+            if done:
                 notification["status"] = "acknowledged"
-            return True
+            is_emergency = notification["type"] == "EMERGENCY"
+        if done and is_emergency:
+            self._signal_sdn("EMERGENCY_END", message_id)
+        return True
 
     def get_delivery_status(self, message_id: int):
         with self.lock:

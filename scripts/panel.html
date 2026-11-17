@@ -1,0 +1,111 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Emergency Notification Control Panel</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#2a313c;--tx:#e6edf3;--mut:#8b949e;--red:#ef4444;--amb:#f59e0b;--grn:#22c55e;--blu:#3b82f6}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px system-ui,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-bottom:1px solid var(--line)}
+h1{font-size:17px;margin:0}.pill{font-size:11px;padding:2px 8px;border-radius:99px;background:#21262d;color:var(--mut)}
+.steps{display:grid;grid-template-columns:repeat(3,1fr) auto;gap:12px;padding:12px 20px}
+.step,.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
+.step{display:flex;justify-content:space-between;align-items:center;gap:8px}.step b{display:block}.mut{color:var(--mut);font-size:12px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#484f58;margin-right:6px}.dot.on{background:var(--grn)}.dot.warn{background:var(--amb)}
+button{border:1px solid var(--line);background:#21262d;color:var(--tx);border-radius:7px;padding:7px 12px;cursor:pointer;font:inherit}
+button:hover{background:#2d333b}button.go{background:#1f6feb;border-color:#1f6feb}button.stop{background:#8e1519;border-color:#8e1519}button:disabled{opacity:.4;cursor:default}
+#err{margin:0 20px;color:#fca5a5;min-height:20px}.grid{display:grid;grid-template-columns:300px 1fr 330px;gap:12px;padding:0 20px 20px}
+@media(max-width:1100px){.grid,.steps{grid-template-columns:1fr}}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);margin:0 0 10px}.card{margin-bottom:12px}
+.seg{display:flex;gap:6px;margin-bottom:8px}.seg label{flex:1;text-align:center;padding:8px;border:1px solid var(--line);border-radius:7px;cursor:pointer;color:var(--mut)}
+.seg input{display:none}.seg label:has(input[value=EMERGENCY]:checked){background:var(--red);border-color:var(--red);color:#fff}
+.seg label:has(input[value=NORMAL]:checked){background:var(--blu);border-color:var(--blu);color:#fff}
+textarea{width:100%;height:70px;background:var(--bg);color:var(--tx);border:1px solid var(--line);border-radius:7px;padding:8px;font:inherit;resize:vertical}
+#send{width:100%;margin-top:8px;background:var(--red);border-color:var(--red);font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:4px 6px;border-top:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--mut);font-weight:500}
+code{font:11px ui-monospace,monospace;word-break:break-all}.p300{color:#fca5a5}.p250{color:#fdba74}.p200{color:#93c5fd}
+svg text{fill:var(--tx);font:12px system-ui}svg .sub{fill:var(--mut);font-size:10px}
+.phone{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:12px;background:var(--card)}
+.ph-h{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;font-size:12px}
+.screen{min-height:92px;padding:12px;background:#0b0f14;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.screen.EMERGENCY{background:#7f1d1d;animation:flash .5s 4}.screen.NORMAL{background:#1e3a8a;animation:pop .4s}.screen.off{opacity:.45}
+@keyframes flash{50%{background:#ef4444}}@keyframes pop{from{transform:scale(.97)}}
+.screen .t{font-size:11px;font-weight:700;letter-spacing:.06em}.screen .m{font-size:16px;margin:4px 0;word-break:break-word}
+.hist{padding:6px 10px;max-height:70px;overflow:auto;font-size:12px;color:var(--mut)}
+.b{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;text-transform:uppercase}.b.pending{background:#78350f;color:#fcd34d}.b.acknowledged{background:#14532d;color:#86efac}.b.failed{background:#7f1d1d;color:#fca5a5}
+.n{border-left:4px solid var(--blu);padding:8px 10px;background:var(--bg);border-radius:7px;margin-bottom:8px}.n.EMERGENCY{border-color:var(--red)}
+.bar{height:5px;background:var(--line);border-radius:3px;margin:6px 0}.bar i{display:block;height:100%;background:var(--grn);border-radius:3px}
+.chip{font-size:11px;padding:1px 7px;margin-right:4px;border-radius:5px;background:#14532d;color:#86efac}.chip.m{background:#3b2a12;color:#fcd34d}
+pre{margin:0;max-height:130px;overflow:auto;font:11px ui-monospace,monospace;color:var(--mut);white-space:pre-wrap}
+</style></head><body>
+<header><h1>Emergency Notification Control Panel</h1><span><span class="pill" id="mode"></span> <span class="pill" id="busy"></span></span></header>
+<div class="steps">
+ <div class="step"><div><b>1 · Controller</b><span class="mut" id="s1"></span></div><span><button class="go" data-a="controller_start">Start</button> <button data-a="controller_stop">Stop</button></span></div>
+ <div class="step"><div><b>2 · Network</b><span class="mut" id="s2"></span></div><span><button class="go" data-a="network_start">Start</button> <button data-a="network_stop">Stop</button></span></div>
+ <div class="step"><div><b>3 · Apps</b><span class="mut" id="s3"></span></div><span><button class="go" data-a="apps_start">Start</button> <button data-a="apps_stop">Stop</button></span></div>
+ <div class="step"><div><b>Ping all</b><span class="mut" id="pg">–</span></div><button data-a="ping">Run</button></div>
+</div>
+<div id="err"></div>
+<div class="grid">
+<div>
+ <div class="card"><h2>Send notification</h2>
+  <div class="seg"><label><input type="radio" name="t" value="EMERGENCY" checked>Emergency</label><label><input type="radio" name="t" value="NORMAL">Normal</label></div>
+  <textarea id="m" placeholder="Message to all clients..."></textarea><button id="send">Send to all clients</button></div>
+ <div class="card"><h2>Background load (h4 → h1, port 6000, 15 Mbps)</h2>
+  <button id="flood">Start load</button><div class="mut" style="margin-top:6px">Try an emergency send while it runs, then watch the queue table.</div></div>
+ <div class="card"><h2>Notifications</h2><div id="feed"><span class="mut">None yet</span></div></div>
+</div>
+<div>
+ <div class="card"><h2>Topology (link colour = live traffic from switch port counters)</h2>
+  <svg id="topo" viewBox="0 0 520 330" width="100%"></svg></div>
+ <div class="card"><h2>Queues per switch port (pkts sent)</h2><div id="queues" class="mut">Network not running</div></div>
+ <div class="card"><h2>Flow table (s1)</h2><div id="flows" class="mut">Network not running</div></div>
+ <div class="card"><h2>Console</h2><pre id="log"></pre></div>
+</div>
+<div id="phones"></div>
+</div>
+<script>
+const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let S=null; const seen={}; const HOSTS={h1:[260,45,'Server','10.0.0.1',1],h2:[55,165,'Client1','10.0.0.2',2],h3:[260,285,'Client2','10.0.0.3',3],h4:[465,165,'Client3','10.0.0.4',4]};
+async function act(body){try{const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json','X-Panel':'1'},body:JSON.stringify(body)});const j=await r.json();if(!r.ok)$('err').textContent=j.error;else $('err').textContent=''}catch(e){$('err').textContent='Panel unreachable'}poll()}
+document.querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>act({action:b.dataset.a}));
+$('send').onclick=()=>{const m=$('m').value.trim();act({action:'send',type:document.querySelector('input[name=t]:checked').value,message:m}).then(()=>{if(!$('err').textContent)$('m').value=''})};
+$('flood').onclick=()=>act({action:S&&S.flood?'flood_off':'flood_on'});
+function steps(){const c=S.controller,n=S.network,a=S.apps;
+ $('mode').textContent=S.sim?'SIM · loopback, no SDN':'Mininet';$('busy').textContent=S.busy?('working: '+S.busy):'idle';
+ $('s1').innerHTML=S.sim?'n/a in sim':`<br><span class="dot ${c.running?(c.switch?'on':'warn'):''}"></span>${c.running?(c.switch?'running, switch connected':'running, waiting for switch'):'stopped'}`;
+ $('s2').innerHTML=S.sim?'n/a in sim':`<br><span class="dot ${n.status=='up'?'on':'warn'}"></span>${n.status}`;
+ $('s3').innerHTML=`<br><span class="dot ${a.running?'on':''}"></span>${a.running?'server + 3 clients':'stopped'}`;
+ $('pg').textContent=S.ping||'–';if(S.error)$('err').textContent=S.error;
+ $('flood').textContent=S.flood?'Stop load':'Start load';$('flood').className=S.flood?'stop':'';
+ document.querySelectorAll('[data-a]').forEach(b=>b.disabled=!!S.busy&&b.dataset.a!='controller_stop');}
+function topo(){const r=S.net.rates||{},cl={};S.clients.forEach(c=>cl[c.host]=c);let h='';
+ for(const [k,[x,y,nm,ip,port]] of Object.entries(HOSTS)){const kb=r[port]||0,w=1.5+Math.min(7,Math.log10(1+kb)*1.6),col=kb>1?(kb>2000?'#ef4444':'#f59e0b'):'#30363d';
+  h+=`<line x1="260" y1="165" x2="${x}" y2="${y}" stroke="${col}" stroke-width="${w}"/><text class="sub" x="${(x+260)/2+6}" y="${(y+165)/2-4}">${kb>1?kb+' kbps':''}</text>`;}
+ h+=`<rect x="215" y="145" width="90" height="40" rx="8" fill="#1f6feb"/><text x="260" y="170" text-anchor="middle">s1 (OVS)</text>`;
+ for(const [k,[x,y,nm,ip]] of Object.entries(HOSTS)){const c=cl[k],bad=c&&(!c.running||c.status=='error'),fz=c&&c.frozen,fill=k=='h1'?(S.apps.running?'#14532d':'#21262d'):(fz?'#4b5563':bad?'#7f1d1d':c?'#14532d':'#21262d');
+  h+=`<rect x="${x-42}" y="${y-20}" width="84" height="40" rx="8" fill="${fill}" stroke="#30363d"/><text x="${x}" y="${y-2}" text-anchor="middle">${nm}${fz?' ❄':''}</text><text class="sub" x="${x}" y="${y+13}" text-anchor="middle">${k} · ${ip}</text>`;}
+ $('topo').innerHTML=h;}
+function tables(){const q=S.net.queues||[];
+ if(!S.net.flows.length&&!q.length){$('queues').textContent=S.network.status=='up'?'Waiting for stats…':'Network not running';$('flows').textContent=$('queues').textContent;return}
+ const by={};q.forEach(x=>{(by[x.port]=by[x.port]||{})[x.queue]=x.pkts});
+ $('queues').innerHTML=`<table><tr><th>port</th><th>→ host</th><th>Q0 background</th><th>Q1 emergency</th><th>Q2 normal</th></tr>`+Object.keys(by).sort().map(p=>`<tr><td>s1-eth${p}</td><td>h${p}</td><td>${by[p][0]??0}</td><td class="p300">${by[p][1]??0}</td><td class="p200">${by[p][2]??0}</td></tr>`).join('')+`</table>`;
+ $('flows').innerHTML=`<table><tr><th>pri</th><th>match</th><th>actions</th><th>pkts</th></tr>`+S.net.flows.map(f=>`<tr><td class="p${f.priority}">${f.priority}</td><td><code>${esc(f.match)}</code></td><td><code>${esc(f.actions)}</code></td><td>${f.packets}</td></tr>`).join('')+`</table>`;}
+function phones(){const ph=$('phones');if(!S.clients.length){ph.innerHTML='<div class="card mut">Start the apps to see client screens</div>';for(const k in seen)delete seen[k];return}
+ const note=ph.querySelector('.card.mut');if(note)note.remove();
+ S.clients.forEach(c=>{let el=document.getElementById('ph-'+c.name);if(!el){el=document.createElement('div');el.id='ph-'+c.name;el.className='phone';
+   el.innerHTML=`<div class="ph-h"><b>${esc(c.name)} <span class="mut">${esc(c.host)}</span></b><span><span class="pill" data-r="st"></span> <button data-r="fz"></button></span></div><div class="screen off" data-r="sc"><div class="mut">Waiting for alerts…</div></div><div class="hist" data-r="hi"></div>`;
+   el.querySelector('[data-r=fz]').onclick=()=>{const f=el.dataset.fz=='1';act({action:f?'resume':'freeze',name:c.name})};$('phones').appendChild(el);}
+  const q=r=>el.querySelector('[data-r='+r+']'),n=c.events.filter(e=>e.kind=='notification'),last=n[n.length-1];
+  el.dataset.fz=c.frozen?'1':'0';q('st').textContent=c.frozen?'frozen (not ACKing)':c.running?c.status:'stopped';q('fz').textContent=c.frozen?'Resume':'Freeze';q('fz').disabled=!c.running;
+  if(last&&last.seq!=seen[c.name]){const first=seen[c.name]===undefined;seen[c.name]=last.seq;const sc=q('sc');sc.className='screen '+last.type;if(first)sc.style.animation='none';
+   sc.innerHTML=`<div class="t">${esc(last.type)} · #${last.id} · ${esc(last.time)}</div><div class="m">${esc(last.message)}</div><div class="mut">ACK sent ✓</div>`}
+  else if(!last)q('sc').className='screen off';
+  q('hi').innerHTML=n.slice().reverse().slice(1).map(e=>`${esc(e.time)} <b>${esc(e.type)}</b> ${esc(e.message)}`).join('<br>');});
+ document.querySelectorAll('.phone').forEach(e=>{if(!S.clients.some(c=>'ph-'+c.name==e.id)){e.remove();delete seen[e.id.slice(3)]}});}
+function feed(){const ns=(S.server&&S.server.notifications)||[];
+ $('feed').innerHTML=ns.length?ns.slice(0,6).map(n=>{const p=n.expected?Math.round(100*n.acknowledged/n.expected):0;
+  return `<div class="n ${n.type}"><b>#${n.id} ${n.type}</b> <span class="b ${n.status}">${n.status}</span><div>${esc(n.message)}</div><div class="bar"><i style="width:${p}%"></i></div>
+  <span class="mut">${n.acknowledged}/${n.expected} ACKs · retries ${n.retries}</span><div>${n.acks.map(a=>`<span class="chip">✓ ${esc(a)}</span>`).join('')}${n.missing.map(a=>`<span class="chip m">… ${esc(a)}</span>`).join('')}</div></div>`}).join(''):'<span class="mut">None yet</span>'}
+function logs(){const L=[...S.controller.log.map(l=>'[ctrl] '+l),...S.server_log.map(l=>'[srv] '+l)];$('log').textContent=L.slice(-25).join('\n')}
+async function poll(){try{S=await (await fetch('/api/state')).json();steps();topo();tables();phones();feed();logs()}catch(e){$('err').textContent='Panel unreachable'}}
+poll();setInterval(poll,800);
+</script></body></html>
