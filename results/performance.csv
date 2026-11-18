@@ -1,0 +1,4 @@
+subscribers,success_rate_percent,average_latency_s,p95_latency_s,failures
+3,100.0,0.0594,0.0638,0
+10,100.0,0.0581,0.0602,0
+25,100.0,0.0631,0.0664,0

@@ -23,8 +23,9 @@ def emit(prefix, obj):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--udp-port", type=int, default=5000)
+    ap.add_argument("--sdn-signal", action="store_true")
     args = ap.parse_args()
-    server = NotificationServer(udp_port=args.udp_port)
+    server = NotificationServer(udp_port=args.udp_port, sdn_signal=args.sdn_signal)
     server.start()
     log, stop = {}, threading.Event()
 

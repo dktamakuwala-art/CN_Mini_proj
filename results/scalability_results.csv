@@ -1,0 +1,4 @@
+subscribers,registration_success_percent,notification_delivery_success_percent,ack_success_percent,average_latency_s,p95_latency_s,packet_loss_percent,retransmissions,failed_notifications
+25,100.0,100.0,100.0,0.0512,0.0517,0.0,0,0
+50,100.0,100.0,100.0,0.0611,0.0666,0.0,0,0
+100,100.0,100.0,100.0,0.1251,0.1345,0.0,0,0

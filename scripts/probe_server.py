@@ -10,6 +10,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--clients", type=int, default=3)
     ap.add_argument("--n", type=int, default=15)
+    ap.add_argument("--delay", type=float, default=0.0,
+                    help="Seconds to wait after clients register before sending probes")
     ap.add_argument("--sdn-signal", action="store_true")
     ap.add_argument("--timeout", type=float, default=6.0)
     a = ap.parse_args()
@@ -22,6 +24,8 @@ def main():
         while len(srv.clients) < a.clients and time.monotonic() < end:
             time.sleep(0.2)
         registered = len(srv.clients)
+        if a.delay > 0:
+            time.sleep(a.delay)
         lat, retries, failed = [], 0, 0
         for i in range(a.n):
             t0 = time.perf_counter()

@@ -99,11 +99,22 @@ class EmergencyController(app_manager.OSKenApp):
     def block_port(self, datapath, port, rate):
         """Rate-limit a flooding port: drop its low-priority UDP, keep emergency + control."""
         parser = datapath.ofproto_parser
+        ofp = datapath.ofproto
         match = parser.OFPMatch(in_port=port, eth_type=0x0800, ip_proto=17)
         datapath.send_msg(parser.OFPFlowMod(
             datapath=datapath, priority=220, match=match, instructions=[],
             hard_timeout=FLOOD_BLOCK_SECONDS,
         ))
+        # Ensure unlearned/expired emergency, control, and SDN signal packets still reach the controller
+        for allowed_port in (EMERGENCY_PORT, SERVER_PORT, SDN_SIGNAL_PORT):
+            allow_match = parser.OFPMatch(
+                in_port=port, eth_type=0x0800, ip_proto=17, udp_dst=allowed_port
+            )
+            self.add_flow(
+                datapath, 225, allow_match,
+                [parser.OFPActionOutput(ofp.OFPP_CONTROLLER, ofp.OFPCML_NO_BUFFER)],
+                idle_timeout=0, hard_timeout=FLOOD_BLOCK_SECONDS,
+            )
         self.blocked_ports[(datapath.id, port)] = time.monotonic() + FLOOD_BLOCK_SECONDS
         self.log_event("FLOOD_BLOCKED", dpid=datapath.id, port=port,
                        rate_mbps=round(rate, 2), seconds=FLOOD_BLOCK_SECONDS,
@@ -113,7 +124,7 @@ class EmergencyController(app_manager.OSKenApp):
     def congestion_detected(self):
         return bool(self.congested_ports)
 
-    def add_flow(self, datapath, priority, match, actions):
+    def add_flow(self, datapath, priority, match, actions, idle_timeout=60, hard_timeout=0):
         parser = datapath.ofproto_parser
         instructions = [parser.OFPInstructionActions(
             datapath.ofproto.OFPIT_APPLY_ACTIONS, actions
@@ -123,7 +134,8 @@ class EmergencyController(app_manager.OSKenApp):
             priority=priority,
             match=match,
             instructions=instructions,
-            idle_timeout=60,
+            idle_timeout=idle_timeout,
+            hard_timeout=hard_timeout,
         ))
 
     def _request_port_stats(self, datapath):
@@ -147,7 +159,8 @@ class EmergencyController(app_manager.OSKenApp):
         self.add_flow(
             datapath, 0, parser.OFPMatch(),
             [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
-                                    ofproto.OFPCML_NO_BUFFER)]
+                                    ofproto.OFPCML_NO_BUFFER)],
+            idle_timeout=0,
         )
         self._request_port_stats(datapath)
         self.logger.info("Switch connected: %s", datapath.id)
@@ -162,7 +175,7 @@ class EmergencyController(app_manager.OSKenApp):
             prev_rx = self.previous_rx.get(key)
             self.previous_rx[key] = (stat.rx_bytes, now)
             if prev_rx and now > prev_rx[1] and port < 0xffffff00:
-                rate = (stat.rx_bytes - prev_rx[0]) * 8 / (now - prev_rx[1]) / 1e6
+                rate = max(0, stat.rx_bytes - prev_rx[0]) * 8 / (now - prev_rx[1]) / 1e6
                 if (rate > FLOOD_RATE_THRESHOLD_MBPS
                         and self.blocked_ports.get(key, 0) < now):
                     self.block_port(ev.msg.datapath, port, rate)

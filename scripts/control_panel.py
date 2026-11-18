@@ -207,7 +207,8 @@ class Panel:
         if self.alive(self.server):
             return
         self.server_state = None
-        self.server = self.spawn("h1", [sys.executable, "-u", "scripts/host_server.py"], stdin=True)
+        srv_argv = [sys.executable, "-u", "scripts/host_server.py"] + ([] if self.sim else ["--sdn-signal"])
+        self.server = self.spawn("h1", srv_argv, stdin=True)
         self.pump(self.server, self.on_server)
         time.sleep(1.5)
         for i, (name, host) in enumerate(CLIENTS, 1):

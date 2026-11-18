@@ -17,18 +17,19 @@ class StaticSwitch(app_manager.OSKenApp):
         super().__init__(*args, **kwargs)
         self.mac_to_port = {}
 
-    def _add_flow(self, dp, priority, match, actions):
+    def _add_flow(self, dp, priority, match, actions, idle_timeout=60):
         p = dp.ofproto_parser
         inst = [p.OFPInstructionActions(dp.ofproto.OFPIT_APPLY_ACTIONS, actions)]
         dp.send_msg(p.OFPFlowMod(datapath=dp, priority=priority, match=match,
-                                 instructions=inst, idle_timeout=60))
+                                 instructions=inst, idle_timeout=idle_timeout))
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def features(self, ev):
         dp = ev.msg.datapath
         p, o = dp.ofproto_parser, dp.ofproto
         self._add_flow(dp, 0, p.OFPMatch(),
-                       [p.OFPActionOutput(o.OFPP_CONTROLLER, o.OFPCML_NO_BUFFER)])
+                       [p.OFPActionOutput(o.OFPP_CONTROLLER, o.OFPCML_NO_BUFFER)],
+                       idle_timeout=0)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in(self, ev):

@@ -25,9 +25,9 @@ def run_condition(mode, load, n):
     if os.path.exists(log_file):
         os.remove(log_file)
     env = dict(os.environ, SDN_EVENT_LOG=log_file, PYTHONPATH=ROOT)
+    ctl_out = open(os.path.join(ROOT, "logs", f"ctl_{mode}_{load}.out"), "w")
     ctl = subprocess.Popen(["osken-manager", CONTROLLERS[mode]], cwd=ROOT, env=env,
-                           stdout=open(os.path.join(ROOT, "logs", f"ctl_{mode}_{load}.out"), "w"),
-                           stderr=subprocess.STDOUT)
+                           stdout=ctl_out, stderr=subprocess.STDOUT)
     time.sleep(3)
     net = Mininet(topo=EmergencyTopology(), controller=None, link=TCLink)
     net.addController("c0", controller=RemoteController, ip="127.0.0.1", port=6653)
@@ -39,19 +39,25 @@ def run_condition(mode, load, n):
         time.sleep(2)
         h1, h2, h3, h4 = (net.get(x) for x in ("h1", "h2", "h3", "h4"))
         net.pingAll(timeout=2)
+
+        # Start probe_server on h1 first so clients can register immediately
+        cmd = [PY, "-u", "scripts/probe_server.py", "--n", str(n),
+               "--delay", "5" if load > 0 else "0"]
+        if mode == "sdn":
+            cmd.append("--sdn-signal")
+        probe_proc = h1.popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        time.sleep(0.5)
+
         for i, h in enumerate((h2, h3, h4), 1):
             procs.append(h.popen([PY, "-u", "client.py", "--name", f"Client{i}"], cwd=ROOT,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
-        time.sleep(1)
+        time.sleep(1.5)
         if load > 0:                    # h3 and h4 both flood h2 -> 2*load into one 10 Mbps port
             for h in (h3, h4):
                 procs.append(h.popen([PY, "scripts/flood.py", "10.0.0.2", "6000", str(load)],
                                      cwd=ROOT, stdout=subprocess.DEVNULL))
-            time.sleep(5)               # let congestion build / controller react
-        cmd = [PY, "-u", "scripts/probe_server.py", "--n", str(n)]
-        if mode == "sdn":
-            cmd.append("--sdn-signal")
-        out = h1.cmd("cd %s && %s" % (ROOT, " ".join(cmd)))
+
+        out, _ = probe_proc.communicate(timeout=max(60, n * 10))
         line = [l for l in out.splitlines() if l.startswith("{")]
         result = json.loads(line[-1]) if line else {"error": out[-200:]}
         flows = net.get("s1").cmd("ovs-ofctl -O OpenFlow13 dump-flows s1")
@@ -62,6 +68,11 @@ def run_condition(mode, load, n):
             p.terminate()
         net.stop()
         ctl.terminate()
+        try:
+            ctl.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            ctl.kill()
+        ctl_out.close()
         time.sleep(1)
 
 
